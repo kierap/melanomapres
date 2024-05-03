@@ -1,0 +1,368 @@
+---
+title: "Gender differences in gene expression in Melanoma: an analysis of the TCGA Melanoma database"
+author: "Kiera Patton, contributors to broader project: Dan Deegan, Gillian Mcguire, Nora Engel"
+date: 2024-5-3
+format: html
+editor: visual
+toc: true
+toc-depth: 3
+bibliography: references.bib
+self-contained: true
+echo: false
+code-fold: true
+---
+
+```{r}
+#| output: false
+devtools::install_github("coriell-research/coriell")
+library(viridis)
+load.libs <- c(
+  "DOSE",
+  "GO.db",
+  "GSEABase",
+  "org.Hs.eg.db",
+  "clusterProfiler",
+  "dplyr",
+  "tidyr",
+  "ggplot2",
+  "stringr",
+  "RColorBrewer",
+  "rWikiPathways",
+  "RCy3")
+
+library(clusterProfiler)
+library(TCGAbiolinks)
+library(DESeq2)
+library(pheatmap)
+library(EnhancedVolcano)
+library(fgsea)
+library(msigdbr)
+library("org.Hs.eg.db")
+library(pathview)
+library(gage)
+library(gageData)
+library("AnnotationDbi")
+library(dplyr)
+library(tidyverse)
+library(gprofiler2)
+library(rnaturalearth)
+library(sf)
+#set this to whatever the directory you need is
+#setwd()
+```
+
+load TCGA data
+
+```{r}
+# | output: false  
+# | message: false
+# | warning: false
+
+#structure our query so we can download, pretty easy to change these variables,
+#GDCquery will generally tell you a lot about
+SKCM_query <- GDCquery(
+  project = "TCGA-SKCM", data.category = "Transcriptome Profiling", 
+  experimental.strategy = "RNA-Seq", workflow.type = "STAR - Counts",
+  data.type = "Gene Expression Quantification")
+GDCdownload(SKCM_query)
+SKCM_data <- GDCprepare(SKCM_query)
+
+```
+
+Load melanoma mortality maps
+
+```{r}
+# | output: false  
+# | message: false
+# | warning: false
+
+female_mortality <- read.csv("dataset-asr-inc-females-in-2022-melanoma-of-skin.csv")
+male_mortality <- read.csv("dataset-asr-inc-males-in-2022-melanoma-of-skin.csv")
+mortalitydiff <- male_mortality$ASR..World..per.100.000 - female_mortality$ASR..World..per.100.000
+female_mortality$mortalitydiff <- mortalitydiff
+countryshapefiles <- rnaturalearth::ne_countries()
+names(countryshapefiles)[names(countryshapefiles) == 'adm0_a3'] <- 'Alpha.3.code'
+mortalityshapefile <- inner_join(countryshapefiles, female_mortality)
+
+
+```
+
+```{r, }
+# | output: false  
+# | message: false
+# | warning: false
+
+#filter out NAs
+SKCM_data_noNAs <- SKCM_data[, !is.na(SKCM_data@colData$age_at_index)]
+#filter by metastatic
+SKCM_data_noNAs_metastatic <- SKCM_data_noNAs[, SKCM_data_noNAs@colData$sample_type == "Metastatic"]
+SKCM_data_noNAs_meta_young <- SKCM_data_noNAs_metastatic[, SKCM_data_noNAs_metastatic@colData$age_at_index <= 50]
+SKCM_data_noNAs_meta_young_male <- SKCM_data_noNAs_meta_young[,SKCM_data_noNAs_meta_young@colData$gender == "male"]
+SKCM_data_noNAs_meta_young_female <- SKCM_data_noNAs_meta_young[,SKCM_data_noNAs_meta_young@colData$gender == "female"]
+SKCM_data_noNAs_meta_old <- SKCM_data_noNAs_metastatic[, SKCM_data_noNAs_metastatic@colData$age_at_index >50]
+SKCM_data_noNAs_meta_old_male <- SKCM_data_noNAs_meta_old[,SKCM_data_noNAs_meta_old@colData$gender == "male"]
+SKCM_data_noNAs_meta_old_female <- SKCM_data_noNAs_meta_old[,SKCM_data_noNAs_meta_old@colData$gender == "female"]
+
+```
+
+```{r}
+#| output: false
+SKCM_mat_meta_old <- assay(SKCM_data_noNAs_meta_old, "unstranded")
+SKCM_md_meta_old <- colData(SKCM_data_noNAs_meta_old)
+SKCM_mat_meta_young <- assay(SKCM_data_noNAs_meta_young, "unstranded")
+SKCM_md_meta_young <- colData(SKCM_data_noNAs_meta_young)
+```
+
+```{r}
+geneInfo <- TCGAbiolinks::geneInfoHT
+```
+
+```{r}
+# | output: false  
+# | message: false
+# | warning: false
+
+#structure a deseq dataset so we can perform differential gene expression on it, selecting gender as the variable we're looking at
+SKCM_dds_meta_old <- DESeqDataSetFromMatrix(countData = SKCM_mat_meta_old,
+                                        colData = SKCM_md_meta_old,
+                                        design= ~gender)
+SKCM_dds_meta_young <- DESeqDataSetFromMatrix(countData = SKCM_mat_meta_young,
+                                            colData = SKCM_md_meta_young,
+                                            design= ~gender)
+```
+
+```{r}
+#|output: false
+#perform Deseq on the datasets, this might take a  bit. Deseq basically performs linear regression using a specific algorithm to find differentially expressed genes between two sample sets
+SKCM_dds_meta_young <- DESeq(SKCM_dds_meta_young)
+SKCM_dds_meta_old <- DESeq(SKCM_dds_meta_old)
+```
+
+```{r}
+#only run if you need to save data
+#saveRDS(SKCM_dds_meta_old, file = "SKCM_dds_meta_old.rds")
+#saveRDS(SKCM_dds_meta_young, file = "SKCM_dds_meta_young.rds")
+```
+
+```{r}
+#|output: false
+#select significant genes that are relatively highly expressed in samples and have high changes between male and female patients in older adults, as well as some basic formatting
+#process results for older adults
+gender_res_meta_old <- results(SKCM_dds_meta_old, contrast = c('gender','male','female'))
+
+gender_res_meta_old <-as.data.frame(gender_res_meta_old)
+gender_res_meta_old <- gender_res_meta_old %>% mutate(diffexpressed = case_when(
+  gender_res_meta_old$log2FoldChange > 1.0 & gender_res_meta_old$padj < 0.05 ~ 'Male',
+  gender_res_meta_old$log2FoldChange < -1.0 & gender_res_meta_old$padj < 0.05 ~ 'Female',
+  padj > 0.05 ~ 'NO'
+))
+gender_res_meta_old_p0.05 <- gender_res_meta_old[which(gender_res_meta_old$padj<0.05 & gender_res_meta_old$baseMean >10 & abs(gender_res_meta_old$log2FoldChange) > 1 ),]
+gene_names <- data.frame(SKCM_data@rowRanges$gene_name, SKCM_data@rowRanges$gene_id)
+colnames(gene_names) = c("gene_name", "gene_id")
+gender_res_meta_old_p0.05 <- as.data.frame(gender_res_meta_old_p0.05)
+myDF <- cbind(gene_id = rownames(gender_res_meta_old_p0.05), gender_res_meta_old_p0.05)
+myDF
+gender_res_meta_old_p0.05 <- left_join(myDF, gene_names)
+gender_res_meta_old_p0.05 <- as_tibble(gender_res_meta_old_p0.05) 
+
+#we need this for the heatmap that's going to be performed
+row.names(gender_res_meta_old_p0.05)<- gender_res_meta_old_p0.05$gene_id
+```
+
+```{r}
+#|output: false
+gender_res_meta_young <- results(SKCM_dds_meta_young, contrast = c('gender','male','female'))
+#select significant genes that are relatively highly expressed in samples and have high changes between male and female patients in younger adults
+#process results for younger adults
+gender_res_meta_young <- results(SKCM_dds_meta_young, contrast = c('gender','male','female'))
+gender_res_meta_young <- as.data.frame(gender_res_meta_young)
+gender_res_meta_young <- gender_res_meta_young %>% mutate(diffexpressed = case_when(
+  gender_res_meta_young$log2FoldChange > 1.0 & gender_res_meta_young$padj < 0.05 ~ 'Male',
+  gender_res_meta_young$log2FoldChange < -1.0 & gender_res_meta_young$padj < 0.05 ~ 'Female',
+  padj > 0.05 ~ 'NO'
+))
+gender_res_meta_young_p0.05 <- gender_res_meta_young[which(gender_res_meta_young$padj<0.05 & gender_res_meta_young$baseMean >10 & abs(gender_res_meta_young$log2FoldChange) > 1 ),]
+gene_names <- data.frame(SKCM_data@rowRanges$gene_name, SKCM_data@rowRanges$gene_id)
+colnames(gene_names) = c("gene_name", "gene_id")
+gender_res_meta_young_p0.05 <- as.data.frame(gender_res_meta_young_p0.05)
+myDF <- cbind(gene_id = rownames(gender_res_meta_young_p0.05), gender_res_meta_young_p0.05)
+myDF
+gender_res_meta_young_p0.05 <- left_join(myDF, gene_names)
+gender_res_meta_young_p0.05 <- as_tibble(gender_res_meta_young_p0.05)
+row.names(gender_res_meta_young_p0.05)<- gender_res_meta_young_p0.05$gene_id
+```
+
+## Aims
+
+Melanoma is one of the deadliest forms of skin cancer, with high mortality despite being fairly rare, and differences in mortality based on patient gender. [@dakup2022] The exact biological or environmental reasons for this are still being pinned down. Some of the possible explanations include immunological and mutational burden differences. [@klein2016] The goal of this project is to discover highly expressed genes that are differentially expressed between genders in melanoma, using publicly available bioinformatics databases such as The Cancer Genome Atlas. I will use R packages such as Deseq2 and cytoscape that allow you to query gene expression differences between subsets of data and look at differences in biological pathways associated with those genes, with the idea being to construct maps of the pathways involved ideally.
+
+## Scope and System
+
+My research is divided into two scopes, I would say: the micro level of looking at melanoma RNAseq data from animal models in the lab I work in. and the macro level of looking at large databases of melanoma gene expression data from many hospitals. I also plan to incorporate some epidemiological information on global melanoma rates from the WHO international organization for research on cancer
+
+## Methods
+
+Data was downloaded from TCGA biolinks using the TCGAbiolinks R package. Data was subsetted based on metastatic status and on age over and under 50. RNAseq data was analyzed using the Deseq2 package and results with an adjusted p value \<0.05 and log2FoldChange over the absolute value of 1 were kept. [@colaprico2016] Pathway analysis was performed using the clusterprofiler R package following . Volcano plots were made in ggplot following the biostatsquid vignette on the subject. the graph of global melanoma mortality differences was produced with data from the WHO International agency for research on cancer[@internat2020]
+
+## Results
+
+### Map of differences in melanoma mortality by gender by region
+
+```{r}
+ggplot(data = mortalityshapefile)+
+  scale_color_viridis_c(option = "C")+
+    geom_sf(aes(fill = mortalitydiff))+
+  scale_fill_gradientn(colors = rainbow(3))+
+  labs(
+    fill = "Age Standardized mortality \n difference per 100,000\n (positive = higher male mortality)",
+    title = "Mortality differences by country"
+  )
+```
+
+### Heatmaps and pathway analysis of TCGA Data
+
+```{r, out.width= "100%", out.height="1500"}
+#|llabel: Heatmap
+SKCM_norm_old <- assay(vst(SKCM_dds_meta_old))
+SKCM_norm_young <- assay(vst(SKCM_dds_meta_young))
+library(pheatmap)
+#generate heatmaps
+SKCM_norm_old <- SKCM_norm_old[rownames(gender_res_meta_old_p0.05),]
+SKCM_norm_young <- SKCM_norm_young[rownames(gender_res_meta_young_p0.05),]
+heatmap_md <- as.data.frame(colData(SKCM_data_noNAs_meta_old)[,c('vital_status','gender')])
+heatmap_row_old <- gender_res_meta_old_p0.05$gene_name
+pheatmap(SKCM_norm_old, show_rownames = F, show_colnames = F,
+         annotation_col = heatmap_md)
+pheatmap(SKCM_norm_young, show_rownames = F, show_colnames = F)
+```
+
+### Volcano plot of differential gene expression
+
+```{r}
+ggplot(data = gender_res_meta_old, aes(x = log2FoldChange, y = -log10(pvalue), col = diffexpressed)) +
+         geom_point()+
+  geom_vline(xintercept = c(-1.0, 1.0), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') + 
+  geom_point() +
+  scale_color_manual(values = c("#00AFBB", "#FFDB6D", "grey"),
+                     labels = c("Female", "Male", "Not significant"))+
+  coord_cartesian(ylim = c(0, 50), xlim = c(-10, 10))+
+  labs(
+    x = "Log2foldchange(logarithmic representation of difference)", 
+    y = "Statistical Significance(log(pvalue)", 
+    title = "Volcano Plot of significant differentially expressed genes between genders",
+    subtitle = "Older Patients",
+    color = "Differential Expression \n by Gender"
+  )
+ggplot(data = gender_res_meta_young, aes(x = log2FoldChange, y = -log10(pvalue), col = diffexpressed)) +
+         geom_point()+
+  geom_vline(xintercept = c(-1.0, 1.0), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') + 
+  geom_point() +
+  scale_color_manual(values = c("#00AFBB", "#FFDB6D", "grey"),
+                     labels = c("Female", "Male", "Not significant"))+
+  coord_cartesian(ylim = c(0, 50), xlim = c(-10, 10))+
+  labs(
+    x = "Log2foldchange(logarithmic representation of difference)", 
+    y = "Statistical Significance(log(pvalue)", 
+    title = "Volcano Plot of significant differentially expressed genes between genders",
+    subtitle = "Younger Patients",
+    color = "Differential Expression \n by Gender"
+  )
+
+```
+
+### Analysis of differentially expressed genes in Biological Pathways
+
+```{r}
+gender_res_meta_old_p0.05$gene_id <- str_replace(gender_res_meta_old_p0.05$gene_id,
+                                   pattern = ".[0-9]+$",
+                                   replacement = "")
+
+
+```
+
+```{r}
+gender_res_meta_young_p0.05$gene_id <- str_replace(gender_res_meta_young_p0.05$gene_id,
+                                   pattern = ".[0-9]+$",
+                                   replacement = "")
+```
+
+```{r}
+up_genes_old <- subset(
+  gender_res_meta_old_p0.05, 
+  padj < 0.05 & log2FoldChange > 0, 
+  select = gene_id, 
+  drop = TRUE
+  )
+down_genes_old <- subset(
+  gender_res_meta_old_p0.05, 
+  padj < 0.05 & log2FoldChange < 0, 
+  select = gene_id, 
+  drop = TRUE
+  )
+ego_up_old <- enrichGO(
+  up_genes_old,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "ALL",
+  pool = TRUE,
+  readable = TRUE
+)
+ego_down_old <- enrichGO(
+  down_genes_old,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "ALL",
+  pool = TRUE,
+  readable = TRUE
+)
+dotplot(ego_up_old) + labs(title = "Differentially Expressed Pathways in Male Patients",
+                           subtitle = "Older Patients")
+dotplot(ego_down_old) + labs(title = "Differentially Expressed Pathways in Female Patients",
+                           subtitle = "Older Patients")
+```
+
+```{r}
+up_genes_young <- subset(
+  gender_res_meta_young_p0.05, 
+  padj < 0.05 & log2FoldChange > 0, 
+  select = gene_id, 
+  drop = TRUE
+  )
+down_genes_young <- subset(
+  gender_res_meta_young_p0.05, 
+  padj < 0.05 & log2FoldChange < 0, 
+  select = gene_id, 
+  drop = TRUE
+  )
+ego_up_young <- enrichGO(
+  up_genes_young,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "ALL",
+  pool = TRUE,
+  readable = TRUE
+)
+ego_down_young <- enrichGO(
+  down_genes_young,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "ALL",
+  pool = TRUE,
+  readable = TRUE
+)
+```
+
+```{r}
+dotplot(ego_up_young) + labs(title = "Differentially Expressed Pathways in Male Patients",
+                           subtitle = "Younger Patients")
+dotplot(ego_down_young) + labs(title = "Differentially Expressed Pathways in Female Patients",
+                           subtitle = "Younger Patients")
+```
+
+Distinct differences in survival were observed between male and female patients. Many transcription factors displayed sex biased expression, including several Sox genes. Interestingly, there seemed to be many more differentially expressed genes in males, with the increase in numbers of differentially expressed genes particularly pronounced among younger patients. Many of the genes differentially expressed in males were related to neuronal functions, this may have to do with the developmental origin of melanocytes in the neural crest.
+
+## Conclusions
+
+Distinct transcriptional networks in melanoma are enriched in male versus female patients which may help to provide a biological explanation for differences in mortality from melanoma. Particularly, samples from female patients in both age groups are significantly more likely to have highly expressed genes related to immune function.
