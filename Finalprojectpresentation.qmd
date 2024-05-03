@@ -23,7 +23,6 @@ code-fold: true
 #| output: false  
 #| message: false
 #| warning: false
-devtools::install_github("coriell-research/coriell")
 library(viridis)
 load.libs <- c(
   "DOSE",
@@ -57,6 +56,7 @@ library(gprofiler2)
 library(rnaturalearth)
 library(sf)
 library(ggthemes)
+library(enrichplot)
 #set this to whatever the directory you need is
 #setwd()
 ```
@@ -446,3 +446,18 @@ In younger patients, similar trends held true, with 13% of the differentially ex
 ## Conclusions
 
 Distinct transcriptional networks in melanoma are enriched in male versus female patients which may help to provide a biological explanation for differences in mortality from melanoma. Particularly, samples from female patients in both age groups are significantly more likely to have highly expressed genes related to immune function. These differences may be relevant to future clinical treatments. A future direction may be to treat gender as a continuous variable based on a paper about bayesian nearest neighbors.[@Yang2023]
+
+```{r}
+cnetplot(ego_down_old)
+cnetplot(ego_up_old)
+cnetplot(ego_down_young)
+cnetplot(ego_up_young)
+enrichres_down_old <- pairwise_termsim(ego_down_old)
+enrichres_up_old <- pairwise_termsim(ego_up_old)
+enrichres_down_young <- pairwise_termsim(ego_down_young)
+enrichres_up_young <- pairwise_termsim(ego_up_young)
+emapplot(enrichres_down_old)
+emapplot(enrichres_up_old)
+emapplot(enrichres_down_young)
+emapplot(enrichres_up_young)
+```
