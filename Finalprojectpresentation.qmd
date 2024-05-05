@@ -443,21 +443,46 @@ dotplot(ego_down_young) + labs(title = "Differentially Expressed Pathways in Fem
 
 In younger patients, similar trends held true, with 13% of the differentially expressed genes in female patients being involved with immune mediation, and 9% again being part of the immunoglobin complex pathway.
 
+```{r}
+#| layout-ncol: 2
+cnetplot(ego_up_old)+ labs(
+  title = "genes connected to differentially enriched pathways in older females"
+)
+cnetplot(ego_down_old)+ labs(
+  title = "genes connected to differentially enriched pathways in older males"
+)
+
+```
+
+```{r}
+#| layout-ncol: 2
+cnetplot(ego_up_young) + labs(
+  title = "genes connected to differentially enriched pathways in younger males"
+)
+cnetplot(ego_down_young)+ labs(
+  title = "genes connected to differentially enriched pathways in younger females"
+)
+```
+
+```{r}
+enrichres_down_old <- pairwise_termsim(ego_down_old)
+enrichres_up_old <- pairwise_termsim(ego_up_old)
+enrichres_down_young <- pairwise_termsim(ego_down_young)
+enrichres_up_young <- pairwise_termsim(ego_up_young)
+```
+
+```{r}
+#| layout-ncol: 2
+emapplot(enrichres_up_old)+ labs(title = "Network map of differentially enriched pathways in older males")
+emapplot(enrichres_down_old) + labs(title = "Network map of differentially enriched pathways in older females")
+```
+
 ## Conclusions
 
 Distinct transcriptional networks in melanoma are enriched in male versus female patients which may help to provide a biological explanation for differences in mortality from melanoma. Particularly, samples from female patients in both age groups are significantly more likely to have highly expressed genes related to immune function. These differences may be relevant to future clinical treatments. A future direction may be to treat gender as a continuous variable based on a paper about bayesian nearest neighbors.[@Yang2023]
 
 ```{r}
-cnetplot(ego_down_old)
-cnetplot(ego_up_old)
-cnetplot(ego_down_young)
-cnetplot(ego_up_young)
-enrichres_down_old <- pairwise_termsim(ego_down_old)
-enrichres_up_old <- pairwise_termsim(ego_up_old)
-enrichres_down_young <- pairwise_termsim(ego_down_young)
-enrichres_up_young <- pairwise_termsim(ego_up_young)
-emapplot(enrichres_down_old)
-emapplot(enrichres_up_old)
+
 emapplot(enrichres_down_young)
 emapplot(enrichres_up_young)
 ```
